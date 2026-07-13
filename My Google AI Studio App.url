@@ -1,2 +1,576 @@
-[InternetShortcut]
-URL=https://greshcoin-roulette.ai.studio/
+import React, { useState, useEffect, useRef } from 'react';
+import { Case, Skin } from '../types';
+import { pickRandomSkin, RARITY_COLORS, QUALITY_LABELS, RARITY_LABELS } from '../utils/rouletteHelper';
+import { getWeaponSvg } from '../utils/imageGenerator';
+import { playTickSound, playWinSound } from '../utils/audioHelper';
+import { motion, AnimatePresence } from 'motion/react';
+import { Play, Sparkles, Award, RotateCcw, HelpCircle } from 'lucide-react';
+
+// Create a simple tick audio helper first to play audio during the spin
+interface RouletteSpinnerProps {
+  activeCase: Case;
+  caseSkins: Skin[];
+  playerName: string;
+  appliedDiscount: number; // e.g., 10 for 10%
+  onWin: (skins: Skin[], costPaid: number) => void;
+  onUpdateCase: (id: string, updated: Partial<Case>) => void;
+  isPlayerDeactivated?: boolean;
+}
+
+interface SpinnerState {
+  items: Skin[];
+  winningIndex: number;
+  isSpinning: boolean;
+  hasFinished: boolean;
+  wonSkin: Skin | null;
+  randomOffset: number;
+}
+
+export default function RouletteSpinner({
+  activeCase,
+  caseSkins,
+  playerName,
+  appliedDiscount,
+  onWin,
+  onUpdateCase,
+  isPlayerDeactivated = false,
+}: RouletteSpinnerProps) {
+  const [localPriceX1, setLocalPriceX1] = useState<string>('');
+  const [localPriceX2, setLocalPriceX2] = useState<string>('');
+
+  // Sync inputs with activeCase custom prices
+  useEffect(() => {
+    setLocalPriceX1(activeCase.customPriceX1 !== undefined ? String(activeCase.customPriceX1) : '');
+    setLocalPriceX2(activeCase.customPriceX2 !== undefined ? String(activeCase.customPriceX2) : '');
+  }, [activeCase.id, activeCase.customPriceX1, activeCase.customPriceX2]);
+
+  const basePriceX1 = activeCase.customPriceX1 !== undefined ? activeCase.customPriceX1 : activeCase.price;
+  const basePriceX2 = activeCase.customPriceX2 !== undefined ? activeCase.customPriceX2 : activeCase.price * 2;
+
+  const priceX1 = Math.round(basePriceX1 * (1 - appliedDiscount / 100));
+  const priceX2 = Math.round(basePriceX2 * (1 - appliedDiscount / 100));
+
+  const handlePriceX1Change = (val: string) => {
+    setLocalPriceX1(val);
+    const num = val === '' ? undefined : Number(val);
+    onUpdateCase(activeCase.id, { customPriceX1: num });
+  };
+
+  const handlePriceX2Change = (val: string) => {
+    setLocalPriceX2(val);
+    const num = val === '' ? undefined : Number(val);
+    onUpdateCase(activeCase.id, { customPriceX2: num });
+  };
+
+  // Single/Double spin count state
+  const [spinCount, setSpinCount] = useState<1 | 2>(1);
+
+  // Spinner ribbons state
+  const [spinner1, setSpinner1] = useState<SpinnerState>({
+    items: [],
+    winningIndex: 0,
+    isSpinning: false,
+    hasFinished: false,
+    wonSkin: null,
+    randomOffset: 0,
+  });
+
+  const [spinner2, setSpinner2] = useState<SpinnerState>({
+    items: [],
+    winningIndex: 0,
+    isSpinning: false,
+    hasFinished: false,
+    wonSkin: null,
+    randomOffset: 0,
+  });
+
+  // Winners summary to display on main screen
+  const [wonSkinsSummary, setWonSkinsSummary] = useState<Skin[] | null>(null);
+  const [spinId, setSpinId] = useState(0);
+
+  const containerRef1 = useRef<HTMLDivElement>(null);
+  const containerRef2 = useRef<HTMLDivElement>(null);
+
+  const CARD_WIDTH = 220; // px (huge for stream!)
+  const CARD_GAP = 16; // px (larger gap for clear separation!)
+  const STEP = CARD_WIDTH + CARD_GAP; // 236px total per card
+  const TOTAL_ITEMS = 40;
+
+  // Generate a random list of skins ending with the winning one
+  const generateRibbon = (winningSkin: Skin): Skin[] => {
+    const list: Skin[] = [];
+    const activeSkins = caseSkins.filter(s => s.isActive);
+    if (activeSkins.length === 0) return [];
+
+    for (let i = 0; i < TOTAL_ITEMS; i++) {
+      if (i === 32) {
+        // This is our winning spot
+        list.push(winningSkin);
+      } else {
+        // Fill with random skins
+        const randomIdx = Math.floor(Math.random() * activeSkins.length);
+        list.push(activeSkins[randomIdx]);
+      }
+    }
+    return list;
+  };
+
+  const startSpin = (count: 1 | 2) => {
+    if (spinner1.isSpinning || spinner2.isSpinning) return;
+    if (caseSkins.filter(s => s.isActive).length === 0) {
+      alert('В этом кейсе нет активных скинов! Активируйте их в админ-панели.');
+      return;
+    }
+
+    setSpinCount(count);
+    setWonSkinsSummary(null);
+    setSpinId(prev => prev + 1);
+
+    // Pick winning skins
+    const winSkin1 = pickRandomSkin(caseSkins);
+    const winSkin2 = count === 2 ? pickRandomSkin(caseSkins) : null;
+
+    const ribbon1 = generateRibbon(winSkin1);
+    const ribbon2 = winSkin2 ? generateRibbon(winSkin2) : [];
+
+    const offset1 = Math.floor(Math.random() * 170) - 85;
+    const offset2 = Math.floor(Math.random() * 170) - 85;
+
+    setSpinner1({
+      items: ribbon1,
+      winningIndex: 32,
+      isSpinning: true,
+      hasFinished: false,
+      wonSkin: winSkin1,
+      randomOffset: offset1,
+    });
+
+    if (count === 2 && winSkin2) {
+      setSpinner2({
+        items: ribbon2,
+        winningIndex: 32,
+        isSpinning: true,
+        hasFinished: false,
+        wonSkin: winSkin2,
+        randomOffset: offset2,
+      });
+    } else {
+      setSpinner2({
+        items: [],
+        winningIndex: 0,
+        isSpinning: false,
+        hasFinished: false,
+        wonSkin: null,
+        randomOffset: 0,
+      });
+    }
+
+    // Audio tickers trigger
+    let lastTickTime = 0;
+    // Start synthetic tick rolling sounds that slow down over 6 seconds for extra smooth drama
+    const duration = 6000; // 6 seconds spin
+    const startTime = Date.now();
+
+    const playTicks = () => {
+      const elapsed = Date.now() - startTime;
+      if (elapsed >= duration) return;
+
+      // Slow down ticks exponentially as we get closer to the end
+      const progress = elapsed / duration;
+      const currentInterval = 40 + Math.pow(progress, 3.5) * 800;
+
+      if (Date.now() - lastTickTime > currentInterval) {
+        // playTickSound();
+        lastTickTime = Date.now();
+      }
+      requestAnimationFrame(playTicks);
+    };
+    playTicks();
+
+    // End of spin timeout
+    setTimeout(() => {
+      playWinSound();
+
+      setSpinner1(prev => ({ ...prev, isSpinning: false, hasFinished: true }));
+      
+      const winners = [winSkin1];
+      let paidPrice = count === 1 ? priceX1 : priceX2;
+
+      if (count === 2 && winSkin2) {
+        setSpinner2(prev => ({ ...prev, isSpinning: false, hasFinished: true }));
+        winners.push(winSkin2);
+      }
+
+      setWonSkinsSummary(winners);
+      onWin(winners, paidPrice);
+    }, duration);
+  };
+
+  const handleReset = () => {
+    setSpinner1({ items: [], winningIndex: 0, isSpinning: false, hasFinished: false, wonSkin: null, randomOffset: 0 });
+    setSpinner2({ items: [], winningIndex: 0, isSpinning: false, hasFinished: false, wonSkin: null, randomOffset: 0 });
+    setWonSkinsSummary(null);
+  };
+
+  // Center alignment offset calculation for framer motion ribbon
+  const getSpinTranslation = (ref: React.RefObject<HTMLDivElement | null>) => {
+    const width = ref.current?.offsetWidth || 800;
+    const centerPoint = width / 2;
+    // We want the 32nd item to align right in front of the selector
+    // slightly ahead of center to match CS:GO style (plus we can randomize offset by +-15px so it feels organic!)
+    const winningOffset = (32 * STEP) - centerPoint + (CARD_WIDTH / 2);
+    return -winningOffset;
+  };
+
+  const t1 = containerRef1.current ? getSpinTranslation(containerRef1) : -3900;
+  const t2 = containerRef2.current ? getSpinTranslation(containerRef2) : -3900;
+
+  const isAnySpinning = spinner1.isSpinning || spinner2.isSpinning;
+
+  return (
+    <div id="roulette-box" className="bg-neutral-900 border border-neutral-800/80 rounded-2xl p-6 shadow-2xl relative">
+      <div className="absolute top-0 right-0 w-48 h-48 bg-indigo-500/5 rounded-full blur-2xl pointer-events-none" />
+
+      {/* Header Info */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-5 mb-6">
+        <div>
+          <span className="text-xxs font-bold text-indigo-400 uppercase tracking-widest bg-indigo-950/40 border border-indigo-900 px-2.5 py-1 rounded-md">
+            Открытие Кейса
+          </span>
+          <h2 className="text-xl font-bold text-white mt-1.5">{activeCase.name}</h2>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="text-right">
+            <span className="text-xxs text-neutral-500 block">Открыватель:</span>
+            <span className="text-sm font-bold text-indigo-400">{playerName || 'Гость'}</span>
+          </div>
+
+          {appliedDiscount > 0 && (
+            <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs px-2.5 py-1 rounded-lg font-bold">
+              Скидка: -{appliedDiscount}%
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ROULETTE STAGE */}
+      <div className="space-y-8 py-4">
+        
+        {/* --- SPINNER 1 --- */}
+        <div className="relative">
+          <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-20 text-[10px] font-black bg-indigo-600 border border-indigo-500 text-white px-2.5 py-1 rounded uppercase tracking-wider shadow-lg">
+            {spinCount === 2 ? 'Рулл 1' : 'Рулетка'}
+          </div>
+ 
+          {/* Indicator center line / arrow */}
+          <div className="absolute top-0 bottom-0 left-1/2 w-0.5 bg-indigo-500 shadow-[0_0_15px_#6366f1] z-20 pointer-events-none">
+            <div className="absolute top-0 -translate-x-1/2 -translate-y-1/2 border-l-10 border-r-10 border-t-10 border-l-transparent border-r-transparent border-t-indigo-500" />
+            <div className="absolute bottom-0 -translate-x-1/2 translate-y-1/2 border-l-10 border-r-10 border-b-10 border-l-transparent border-r-transparent border-b-indigo-500" />
+          </div>
+ 
+          {/* Ribbon Viewport */}
+          <div
+            ref={containerRef1}
+            className="w-full h-[240px] bg-neutral-950/80 border border-neutral-850 rounded-2xl overflow-hidden relative flex items-center shadow-2xl"
+          >
+            {spinner1.items.length === 0 ? (
+              <div className="w-full flex flex-col items-center justify-center text-center text-neutral-500 select-none">
+                <Sparkles size={32} className="mb-2.5 text-neutral-700 animate-pulse" />
+                <span className="text-sm font-semibold tracking-wide">Нажмите кнопку открытия ниже для начала</span>
+              </div>
+            ) : (
+              <motion.div
+                key={`spinner1-${spinId}`}
+                className="flex gap-4 px-[50%]"
+                initial={{ x: 0 }}
+                animate={spinner1.isSpinning || spinner1.hasFinished ? { x: t1 } : { x: 0 }}
+                transition={(spinner1.isSpinning || spinner1.hasFinished) ? {
+                  duration: 6,
+                  ease: [0.05, 0.9, 0.15, 1.0], // ultra-smooth CS:GO decelerating curve
+                } : {
+                  duration: 0.5,
+                  ease: "easeOut"
+                }}
+                style={{ width: TOTAL_ITEMS * STEP }}
+              >
+                {spinner1.items.map((skin, idx) => {
+                  const rStyle = RARITY_COLORS[skin.rarity];
+                  return (
+                    <div
+                      key={idx}
+                      className={`w-[220px] h-[190px] rounded-2xl bg-gradient-to-b ${rStyle.bg} border ${rStyle.border} ${rStyle.glow} flex flex-col items-center justify-between p-4 flex-shrink-0 select-none shadow-lg`}
+                    >
+                      <div className="w-full flex justify-between items-center text-[10px] font-mono">
+                        <span className="text-neutral-300 font-extrabold truncate max-w-[130px] uppercase tracking-wide">{QUALITY_LABELS[skin.quality]}</span>
+                        {skin.isStatTrak && <span className="text-amber-500 font-black font-sans text-[11px] bg-amber-500/10 px-1.5 py-0.5 rounded animate-pulse">ST</span>}
+                      </div>
+ 
+                      <div className="w-40 h-28 text-white my-2 flex items-center justify-center">
+                        <div className="w-36 h-24 flex items-center justify-center filter drop-shadow-[0_6px_12px_rgba(0,0,0,0.5)]" dangerouslySetInnerHTML={{ __html: getWeaponSvg(skin.image) }} />
+                      </div>
+ 
+                      <div className="w-full text-center">
+                        <p className="text-sm font-black text-white truncate px-1 tracking-tight leading-tight">{skin.name}</p>
+                        <p className="text-xs font-mono text-indigo-400 font-extrabold mt-0.5">{skin.price} GC</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </motion.div>
+            )}
+          </div>
+        </div>
+ 
+        {/* --- SPINNER 2 (Only visible if doing x2 roll) --- */}
+        {spinCount === 2 && (spinner2.items.length > 0 || isAnySpinning) && (
+          <div className="relative">
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-20 text-[10px] font-black bg-indigo-600 border border-indigo-500 text-white px-2.5 py-1 rounded uppercase tracking-wider shadow-lg">
+              Рулл 2
+            </div>
+ 
+            {/* Indicator center line / arrow */}
+            <div className="absolute top-0 bottom-0 left-1/2 w-0.5 bg-indigo-500 shadow-[0_0_15px_#6366f1] z-20 pointer-events-none">
+              <div className="absolute top-0 -translate-x-1/2 -translate-y-1/2 border-l-10 border-r-10 border-t-10 border-l-transparent border-r-transparent border-t-indigo-500" />
+              <div className="absolute bottom-0 -translate-x-1/2 translate-y-1/2 border-l-10 border-r-10 border-b-10 border-l-transparent border-r-transparent border-b-indigo-500" />
+            </div>
+ 
+            {/* Ribbon Viewport */}
+            <div
+              ref={containerRef2}
+              className="w-full h-[240px] bg-neutral-950/80 border border-neutral-850 rounded-2xl overflow-hidden relative flex items-center shadow-2xl"
+            >
+              {spinner2.items.length === 0 ? (
+                <div className="w-full flex items-center justify-center text-center text-neutral-500">
+                  <span className="text-sm font-semibold tracking-wide">Загрузка второго рулла...</span>
+                </div>
+              ) : (
+                <motion.div
+                  key={`spinner2-${spinId}`}
+                  className="flex gap-4 px-[50%]"
+                  initial={{ x: 0 }}
+                  animate={spinner2.isSpinning || spinner2.hasFinished ? { x: t2 } : { x: 0 }}
+                  transition={(spinner2.isSpinning || spinner2.hasFinished) ? {
+                    duration: 6,
+                    ease: [0.05, 0.9, 0.15, 1.0], // ultra-smooth CS:GO decelerating curve
+                  } : {
+                    duration: 0.5,
+                    ease: "easeOut"
+                  }}
+                  style={{ width: TOTAL_ITEMS * STEP }}
+                >
+                  {spinner2.items.map((skin, idx) => {
+                    const rStyle = RARITY_COLORS[skin.rarity];
+                    return (
+                      <div
+                        key={idx}
+                        className={`w-[220px] h-[190px] rounded-2xl bg-gradient-to-b ${rStyle.bg} border ${rStyle.border} ${rStyle.glow} flex flex-col items-center justify-between p-4 flex-shrink-0 select-none shadow-lg`}
+                      >
+                        <div className="w-full flex justify-between items-center text-[10px] font-mono">
+                          <span className="text-neutral-300 font-extrabold truncate max-w-[130px] uppercase tracking-wide">{QUALITY_LABELS[skin.quality]}</span>
+                          {skin.isStatTrak && <span className="text-amber-500 font-black font-sans text-[11px] bg-amber-500/10 px-1.5 py-0.5 rounded animate-pulse">ST</span>}
+                        </div>
+ 
+                        <div className="w-40 h-28 text-white my-2 flex items-center justify-center">
+                          <div className="w-36 h-24 flex items-center justify-center filter drop-shadow-[0_6px_12px_rgba(0,0,0,0.5)]" dangerouslySetInnerHTML={{ __html: getWeaponSvg(skin.image) }} />
+                        </div>
+ 
+                        <div className="w-full text-center">
+                          <p className="text-sm font-black text-white truncate px-1 tracking-tight leading-tight">{skin.name}</p>
+                          <p className="text-xs font-mono text-indigo-400 font-extrabold mt-0.5">{skin.price} GC</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </motion.div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* WINNERS OVERLAY / SUMMARY (FULL SCREEN PORTAL FOR STREAMS!) */}
+      <AnimatePresence>
+        {wonSkinsSummary && !isAnySpinning && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-neutral-950/95 backdrop-blur-2xl overflow-y-auto"
+          >
+            {/* Ambient Radial Background Glow */}
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(99,102,241,0.2),transparent_70%)] pointer-events-none" />
+
+            {/* Glowing rays animation wrapper */}
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-r from-indigo-500/10 to-purple-500/10 rounded-full blur-3xl animate-pulse pointer-events-none" />
+
+            <motion.div
+              initial={{ scale: 0.85, y: 50, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.85, y: -50, opacity: 0 }}
+              transition={{ type: "spring", damping: 22, stiffness: 150 }}
+              className={`relative ${wonSkinsSummary.length > 1 ? 'max-w-5xl' : 'max-w-3xl'} w-full bg-neutral-900/90 border-2 border-indigo-500/40 rounded-3xl p-6 sm:p-10 text-center flex flex-col items-center shadow-[0_0_80px_rgba(99,102,241,0.4)] backdrop-blur-md overflow-hidden`}
+            >
+              <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/5 via-transparent to-transparent pointer-events-none" />
+
+              {/* Decorative particles & text */}
+              <div className="flex items-center justify-center gap-2 text-sm text-amber-400 font-extrabold uppercase tracking-widest mb-6 w-full px-4">
+                <Sparkles size={20} className="animate-spin text-amber-400 flex-shrink-0" />
+                <span className="text-lg sm:text-2xl tracking-normal font-black drop-shadow-[0_0_12px_rgba(245,158,11,0.6)] truncate max-w-full">
+                  {(playerName || 'Гость').toUpperCase()} ВЫБИЛ СКИН!
+                </span>
+                <Sparkles size={20} className="animate-spin text-amber-400 flex-shrink-0" />
+              </div>
+
+              {/* Large item container */}
+              <div className="flex flex-row items-center justify-center gap-4 sm:gap-6 w-full max-w-full overflow-x-auto py-2 no-scrollbar">
+                {wonSkinsSummary.map((win, idx) => {
+                  const rStyle = RARITY_COLORS[win.rarity];
+                  const isMulti = wonSkinsSummary.length > 1;
+                  const cardWidth = isMulti ? "w-[240px] sm:w-[320px]" : "w-72 sm:w-96";
+                  const imageBoxSize = isMulti ? "w-[180px] h-[180px] sm:w-[240px] sm:h-[240px]" : "w-56 h-56 sm:w-72 sm:h-72";
+                  const imageInsideSize = isMulti ? "w-36 h-36 sm:w-48 h-48" : "w-48 h-48 sm:w-64 sm:h-64";
+                  const titleFontSize = isMulti ? "text-base sm:text-lg" : "text-xl sm:text-2xl";
+                  const paddingSize = isMulti ? "p-4 sm:p-5" : "p-6 sm:p-8";
+
+                  return (
+                    <motion.div
+                      key={idx}
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ delay: 0.15 }}
+                      className={`flex flex-col items-center bg-neutral-950/80 border border-neutral-800 rounded-2xl ${paddingSize} ${cardWidth} relative shadow-2xl hover:scale-102 transition duration-300 flex-shrink-0`}
+                    >
+                      {win.isStatTrak && (
+                        <span className="absolute top-4 right-4 text-amber-500 text-[10px] sm:text-xs bg-amber-500/20 px-2 sm:px-3 py-0.5 sm:py-1 border border-amber-500/30 rounded-md font-mono font-black animate-pulse shadow-[0_0_15px_rgba(245,158,11,0.4)]">
+                          StatTrak™
+                        </span>
+                      )}
+
+                      {/* HUGE weapon picture box */}
+                      <div className={`${imageBoxSize} rounded-2xl bg-gradient-to-br ${rStyle.bg} flex items-center justify-center border ${rStyle.border} ${rStyle.glow} p-4 mb-4 sm:mb-6 shadow-inner relative group`}>
+                        <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition rounded-2xl pointer-events-none" />
+                        <div 
+                          className={`${imageInsideSize} text-white flex items-center justify-center filter drop-shadow-[0_10px_20px_rgba(0,0,0,0.6)] transform group-hover:scale-105 transition duration-300`} 
+                          dangerouslySetInnerHTML={{ __html: getWeaponSvg(win.image) }} 
+                        />
+                      </div>
+
+                      <h4 className={`${titleFontSize} font-black text-white line-clamp-2 text-center tracking-tight drop-shadow-md leading-tight`}>{win.name}</h4>
+                      <span className={`text-[10px] sm:text-xs font-extrabold uppercase tracking-widest mt-1.5 sm:mt-2 ${rStyle.text}`}>{RARITY_LABELS[win.rarity]}</span>
+                      
+                      <div className="border-t border-neutral-800/80 w-full mt-4 sm:mt-6 pt-3 sm:pt-4 text-xs sm:text-sm text-neutral-400 flex justify-between items-center font-bold">
+                        <span>{QUALITY_LABELS[win.quality]}</span>
+                        <span className="font-mono text-indigo-400 font-extrabold text-sm sm:text-base bg-indigo-500/15 px-2.5 sm:px-3.5 py-0.5 sm:py-1 rounded-xl border border-indigo-500/20">{win.price} GC</span>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+
+              {/* CTA Acceptance Buttons */}
+              <div className="mt-8 flex flex-col sm:flex-row gap-4 w-full justify-center">
+                <button
+                  onClick={handleReset}
+                  className="px-10 py-4 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-sm sm:text-base rounded-2xl transition-all duration-200 uppercase tracking-widest shadow-[0_4px_30px_rgba(99,102,241,0.5)] hover:shadow-[0_4px_40px_rgba(99,102,241,0.7)] active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Sparkles size={16} />
+                  <span>Принять скин</span>
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* SPINNING CONTROL BOARD */}
+      <div className="mt-6 pt-5 border-t border-neutral-800 flex flex-col md:flex-row items-center justify-between gap-5">
+        
+        {/* Custom Price Inputs (as requested by user) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full md:w-auto">
+          <div>
+            <label className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider flex items-center gap-1">
+              <span>Своя цена (X1):</span>
+              <div className="group relative">
+                <HelpCircle size={10} className="text-neutral-600 cursor-help" />
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-44 p-2 bg-neutral-950 border border-neutral-800 rounded text-[9px] text-neutral-400 font-normal leading-relaxed opacity-0 group-hover:opacity-100 transition pointer-events-none z-30 shadow-xl">
+                  Позволяет вручную перезаписать цену открытия одного кейса для стрим-игр
+                </div>
+              </div>
+            </label>
+            <div className="flex items-center gap-2 mt-1.5">
+              <input
+                type="number"
+                placeholder={String(activeCase.price)}
+                value={localPriceX1}
+                onChange={(e) => handlePriceX1Change(e.target.value)}
+                disabled={isAnySpinning}
+                className="w-24 bg-neutral-950 border border-neutral-800 text-xs rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+              />
+              <span className="text-[11px] font-mono text-neutral-500">GC</span>
+            </div>
+            {appliedDiscount > 0 && (
+              <p className="text-[10px] text-emerald-400 mt-1 font-semibold">
+                С купоном (-{appliedDiscount}%): {priceX1} GC
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider flex items-center gap-1">
+              <span>Своя цена (X2):</span>
+              <div className="group relative">
+                <HelpCircle size={10} className="text-neutral-600 cursor-help" />
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-44 p-2 bg-neutral-950 border border-neutral-800 rounded text-[9px] text-neutral-400 font-normal leading-relaxed opacity-0 group-hover:opacity-100 transition pointer-events-none z-30 shadow-xl">
+                  Позволяет вручную перезаписать цену открытия двух кейсов за раз
+                </div>
+              </div>
+            </label>
+            <div className="flex items-center gap-2 mt-1.5">
+              <input
+                type="number"
+                placeholder={String(activeCase.price * 2)}
+                value={localPriceX2}
+                onChange={(e) => handlePriceX2Change(e.target.value)}
+                disabled={isAnySpinning}
+                className="w-24 bg-neutral-950 border border-neutral-800 text-xs rounded-lg px-2.5 py-1.5 text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+              />
+              <span className="text-[11px] font-mono text-neutral-500">GC</span>
+            </div>
+            {appliedDiscount > 0 && (
+              <p className="text-[10px] text-emerald-400 mt-1 font-semibold">
+                С купоном (-{appliedDiscount}%): {priceX2} GC
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Play Action Buttons */}
+        <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto items-center">
+          {isPlayerDeactivated && (
+            <span className="text-red-400 font-extrabold text-xs uppercase bg-red-950/40 border border-red-900/30 px-3 py-2 rounded-xl text-center shadow-lg animate-pulse">
+              ⚠️ Аккаунт отключен!
+            </span>
+          )}
+          <button
+            onClick={() => startSpin(1)}
+            disabled={isAnySpinning || isPlayerDeactivated}
+            className="w-full sm:w-auto bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white rounded-xl px-5 py-3 text-sm font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/15 disabled:opacity-30 disabled:pointer-events-none transition transform active:scale-95"
+          >
+            <Play size={16} fill="currentColor" />
+            <span>Открыть X1 ({priceX1} GC)</span>
+          </button>
+
+          <button
+            onClick={() => startSpin(2)}
+            disabled={isAnySpinning || isPlayerDeactivated}
+            className="w-full sm:w-auto bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-xl px-5 py-3 text-sm font-bold flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/15 disabled:opacity-30 disabled:pointer-events-none transition transform active:scale-95"
+          >
+            <Sparkles size={16} />
+            <span>Открыть X2 ({priceX2} GC)</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
